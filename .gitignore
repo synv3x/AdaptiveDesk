@@ -1,0 +1,16 @@
+# PlatformIO build files
+.pio/
+
+# VS Code local settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Secrets
+.env
+secrets.h
