@@ -14,3 +14,11 @@ Thumbs.db
 # Secrets
 .env
 secrets.h
+
+# Dashboard / Node
+node_modules/
+dist/
+.env.*
+!.env.example
+secrets*.h
+!secrets.example.h
