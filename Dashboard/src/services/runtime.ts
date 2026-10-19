@@ -6,6 +6,7 @@ import { useSession, type SessionRecord } from '../store/session'
 import { demoControls } from './demoDevice'
 import { startAutomationEngine } from './automationEngine'
 import { notify, startNotifier } from './notifier'
+import { getSerialApi } from './webSerial'
 
 /** Starts all background behaviour. Returns a cleanup function (safe under React StrictMode). */
 export function startRuntime(): () => void {
@@ -41,6 +42,11 @@ export function startRuntime(): () => void {
   const mq = matchMedia('(prefers-color-scheme: dark)')
   mq.addEventListener('change', applyTheme)
 
+  // When an authorized ESP32 is plugged back in, reconnect without any click (Web Serial 'connect' event).
+  const serialApi = getSerialApi()
+  const onSerialPlug = () => useDevice.getState().autoReconnectSerial()
+  serialApi?.addEventListener('connect', onSerialPlug)
+
   // Start the connection for whichever mode was last used.
   if (usePrefs.getState().mode === 'demo') ensureDemoData()
   useDevice.getState().applyMode()
@@ -51,7 +57,8 @@ export function startRuntime(): () => void {
     stopNotifier()
     unsubTheme()
     mq.removeEventListener('change', applyTheme)
-    useDevice.getState().disconnect()
+    serialApi?.removeEventListener('connect', onSerialPlug)
+    useDevice.getState().shutdown()
   }
 }
 

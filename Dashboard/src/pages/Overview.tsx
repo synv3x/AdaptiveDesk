@@ -3,6 +3,8 @@ import { ArrowRight, Coffee, FlaskConical, Gauge, Lightbulb, Play, ScanEye, Shie
 import { Link } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ActivityList, ChartTip, LightingControl, Stat, TimerPanel } from '../components/shared'
+import HardwareDemo from '../components/HardwareDemo'
+import { ConnectEsp32Button } from '../components/SerialPanel'
 import { LockButton } from '../components/LockButton'
 import { Badge, Button, Card, CardHeader, EmptyState, FeatureBadge, Segmented, Skeleton, StatusDot, type Tone } from '../components/ui/primitives'
 import { useConnectionSummary } from '../components/layout/Shell'
@@ -37,6 +39,7 @@ export default function Overview() {
   const now = useNow(30_000)
   const name = usePrefs((s) => s.userName)
   const mode = usePrefs((s) => s.mode)
+  const transport = usePrefs((s) => s.device.transport)
   const profile = useActiveProfile()
   const profiles = usePrefs((s) => s.profiles)
   const conn = useConnectionSummary()
@@ -84,7 +87,7 @@ export default function Overview() {
             <div className="mt-5 flex flex-wrap gap-2">
               {liveDown ? (
                 <>
-                  <Link to="/settings"><Button variant="primary" icon={Wifi}>Connect device</Button></Link>
+                  {transport === 'serial' ? <ConnectEsp32Button /> : <Link to="/settings"><Button variant="primary" icon={Wifi}>Connect device</Button></Link>}
                   <Button icon={FlaskConical} onClick={() => switchMode('demo')}>Explore demo</Button>
                 </>
               ) : (
@@ -106,6 +109,8 @@ export default function Overview() {
         <StatusCard icon={Sparkles} title="Profile" value={profile.name} sub={`${profile.focusMin} min focus · ${profile.shortBreakMin} min breaks`}
           badge={<Link to="/productivity" className="text-xs text-accent hover:underline">Edit</Link>} />
       </section>
+
+      <HardwareDemo />
 
       <section className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -180,7 +185,7 @@ export default function Overview() {
             <dl className="space-y-2.5 text-sm">
               <div className="flex justify-between"><dt className="text-muted">Connection</dt><dd className="flex items-center gap-2"><StatusDot tone={conn.tone} />{conn.label}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Features connected</dt><dd className="tabular">{status === 'connected' ? `${available} / ${FEATURE_IDS.length}` : '—'}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">Wi-Fi signal</dt><dd>{status === 'connected' ? wifi : '—'}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted">{rssi == null && mode === 'live' ? 'Link' : 'Wi-Fi signal'}</dt><dd>{status !== 'connected' ? '—' : rssi == null && mode === 'live' ? 'USB' : wifi}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Last update</dt><dd className="tabular">{lastSeen ? new Date(lastSeen).toLocaleTimeString() : '—'}</dd></div>
             </dl>
           )}

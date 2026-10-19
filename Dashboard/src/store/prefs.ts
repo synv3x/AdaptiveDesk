@@ -47,7 +47,18 @@ interface Prefs {
   userName: string
   theme: ThemePref
   reduceMotion: boolean
-  device: { host: string; port: number; path: string; autoConnect: boolean }
+  device: {
+    /** serial = native Web Serial (default), bridge = legacy Node bridge, wifi = WebSocket to the ESP32 */
+    transport: 'serial' | 'bridge' | 'wifi'
+    /** Remembered USB identity of the ESP32 so we reconnect to the right authorized port. */
+    serialVid?: number
+    serialPid?: number
+    bridgePort: number
+    host: string
+    port: number
+    path: string
+    autoConnect: boolean
+  }
   heartbeatSec: number
   refreshSec: number
   demoProfile: DemoProfile
@@ -70,7 +81,7 @@ const defaults = (): Omit<Prefs, 'set' | 'setMode' | 'updateProfile' | 'resetAll
   userName: '',
   theme: 'dark',
   reduceMotion: false,
-  device: { host: '', port: 81, path: '/ws', autoConnect: true },
+  device: { transport: 'serial', bridgePort: 8787, host: '', port: 81, path: '/ws', autoConnect: true },
   heartbeatSec: 5,
   refreshSec: 0,
   demoProfile: 'full',
@@ -100,7 +111,20 @@ export const usePrefs = create<Prefs>()(
         set((s) => ({ profiles: s.profiles.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
       resetAll: () => set(defaults()),
     }),
-    { name: 'adaptivedesk.prefs', version: 1 },
+    {
+      name: 'adaptivedesk.prefs',
+      version: 3,
+      // v1: Wi-Fi only. v2: added the 'usb' bridge. v3: native Web Serial is the default USB transport and the bridge is legacy.
+      migrate: (persisted) => {
+        const p = persisted as { device?: Record<string, unknown> }
+        const d = { ...(p.device ?? {}) }
+        const bridgePort = typeof d.bridgePort === 'number' ? d.bridgePort : typeof d.usbPort === 'number' ? d.usbPort : 8787
+        delete d.usbPort
+        const transport = d.transport === 'wifi' || (d.transport === undefined && d.host) ? 'wifi' : d.transport === 'bridge' ? 'bridge' : 'serial'
+        p.device = { ...d, transport, bridgePort }
+        return p as never
+      },
+    },
   ),
 )
 

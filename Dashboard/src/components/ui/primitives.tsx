@@ -111,9 +111,17 @@ export function Slider({ value, min = 0, max = 100, step = 1, onCommit, disabled
   value: number; min?: number; max?: number; step?: number; onCommit: (v: number) => void; disabled?: boolean; label: string; unit?: string
 }) {
   const [drag, setDrag] = useState<number | null>(null)
-  const shown = drag ?? value
+  // After release, keep showing what you set until the device reports it (or 1.5 s passes, then the device's real value wins).
+  const [held, setHeld] = useState<number | null>(null)
+  const shown = drag ?? held ?? value
   const fill = ((shown - min) / (max - min)) * 100
-  const commit = () => { if (drag !== null) { onCommit(drag); setDrag(null) } }
+  const commit = () => { if (drag !== null) { onCommit(drag); setHeld(drag); setDrag(null) } }
+  useEffect(() => {
+    if (held === null) return
+    if (value === held) { setHeld(null); return }
+    const t = setTimeout(() => setHeld(null), 1500)
+    return () => clearTimeout(t)
+  }, [held, value])
   return (
     <div className="flex items-center gap-3">
       <input

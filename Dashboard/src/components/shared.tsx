@@ -89,6 +89,7 @@ export function LightingControl({ compact }: { compact?: boolean }) {
   const brightness = typeof f.state.brightness === 'number' ? f.state.brightness : null
   const scenes = Array.isArray(f.state.scenes) ? (f.state.scenes as string[]) : []
   const scene = typeof f.state.scene === 'string' ? f.state.scene : null
+  const physical = f.state.brightnessSource === 'physical'
   return (
     <FeatureGate feature="ambientLighting">
       <div className="space-y-4">
@@ -101,8 +102,8 @@ export function LightingControl({ compact }: { compact?: boolean }) {
         </div>
         {brightness !== null && (
           <div>
-            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">Brightness</div>
-            <Slider label="Brightness" value={brightness} disabled={!enabled} onCommit={(v) => void runCommand('ambientLighting', 'setBrightness', v)} />
+            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">Brightness{physical && <span className="ml-2 normal-case tracking-normal text-faint">set by the slide control on your desk</span>}</div>
+            <Slider label="Brightness" value={brightness} disabled={!enabled || physical} onCommit={(v) => void runCommand('ambientLighting', 'setBrightness', v)} />
           </div>
         )}
         {!compact && scenes.length > 0 && (

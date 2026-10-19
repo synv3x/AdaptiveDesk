@@ -27,7 +27,15 @@ Switch with the Live/Demo control in the top bar. Switching stops any running ti
 
 ## Connecting a real device (Live)
 
-Settings → Device & Network → enter the console's hostname/IP, port and path → Connect. The address is never hard-coded. The firmware needs to speak the protocol below (not implemented yet; existing firmware is untouched).
+Three transports carry the same protocol. Pick one in Settings → Device & Network:
+
+- **USB · Web Serial (default, no Wi-Fi, no helper program):** the browser talks to the ESP32 directly over USB (`src/services/webSerial.ts`). Click **Connect ESP32** and choose the port; it is remembered and reconnected automatically. Works in Chrome/Edge; in Brave enable `brave://flags/#brave-web-serial-api`. Must be served from `localhost` or HTTPS. See `../docs/hardware-demo-setup.md`.
+- **Wi-Fi (optional):** enter the console's address, port and path; needs credentials compiled into the firmware (`secrets.h`) and the local dev server (an HTTPS page can't open `ws://` to a LAN device).
+- **USB bridge (legacy):** `../tools/serial-bridge` relays serial to `ws://127.0.0.1:8787/ws`.
+
+Selecting Web Serial never opens a WebSocket. Tests: `npm test` (Vitest, simulated serial).
+
+The client treats a link as "connected" only after the device itself sends a message, so a running bridge with no board behind it shows an honest error instead of a fake connected state.
 
 ## Wire protocol v1
 
@@ -47,13 +55,16 @@ Dashboard → device: `command {requestId, feature, action, value?}`, `ping {tim
 | Feature id | Reported fields | Commands |
 |---|---|---|
 | `workspacePresence` | `value: bool` | none |
-| `ambientLighting` | `enabled`, optional `brightness 0-100`, `scene`, `scenes[]` | `setEnabled`, `setBrightness`, `setScene` |
+| `ambientLighting` | `enabled`, optional `brightness 0-100`, `color` (`#rrggbb`), `brightnessSource` (`"physical"` = a slide control owns brightness and `setBrightness` is not offered), `scene`, `scenes[]` | `setEnabled`, `setBrightness`, `setColor`, `setScene` |
 | `workspaceAction` | `pressCount` | none (emits `workspaceAction.pressed`) |
 | `privacyProtection` | `enabled` | `setEnabled` (sensitive) |
 | `workstationLock` | `locked: bool` | `lock` (sensitive) |
 | `userAuthentication` | `lastResult: "success"\|"failed"`, `lastAt` | none |
 | `mediaControl` | `volume`, `playing` | `playPause`, `next`, `previous`, `setVolume` |
 | `productivityControls` | `lastControl` | none (emits `control.activated`) |
+| `slideControl` | `position 0-100`, optional `raw` | none |
+| `pressureSensing` | `value 0-100`, `pressed: bool`, `threshold`, optional `raw` | `setThreshold` (5-95) |
+| `audioAlert` | `active: bool`, `muted: bool` | `test`, `setMuted` |
 | `wearable` | `connected`, `pairing`, optional `battery`, `charging`, `intensity`, `intensityLevels[]` | `startPairing`, `stopPairing`, `disconnect`, `vibrate`, `setIntensity` |
 
 ### Reliability rules implemented
@@ -63,6 +74,10 @@ Dashboard → device: `command {requestId, feature, action, value?}`, `ping {tim
 - **No automatic action after reconnect:** the first `hello`/`telemetry` after connecting is a baseline and triggers no events; absence timers are tied to a single connection session.
 - **Lock is never claimed early:** "Locked" appears only when `workstationLock.locked === true` is reported. Rule/lock results say "acknowledged".
 - Commands are validated against an allow-list (`src/lib/features.ts`) before sending. Sensitive actions (lock, disable privacy, disconnect wristband, enabling lock rules) require confirmation.
+
+## Classroom hardware demo
+
+The Overview page has a labeled **Hardware demo** card (slide control, pressure, RGB light, buzzer). In Demo Mode it is simulated; in Live Mode it shows only what the console reports. Firmware, wiring and run steps: `../docs/hardware-demo-setup.md`. Live Mode needs the local dev server (`npm run dev`): the GitHub Pages site is HTTPS and browsers block it from reaching a `ws://` device (the dashboard says so instead of failing silently).
 
 ## Adding hardware later
 

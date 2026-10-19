@@ -11,7 +11,8 @@ import type { Transport, TransportCallbacks } from './deviceClient'
 
 interface DemoState {
   presence: boolean
-  lighting: { enabled: boolean; brightness: number; scene: string }
+  lighting: { enabled: boolean; brightness: number; scene: string; color: string }
+  pressure: { value: number; target: number; threshold: number; muted: boolean; testUntil: number }
   presses: number
   privacy: boolean
   locked: boolean
@@ -24,7 +25,8 @@ interface DemoState {
 
 const fresh = (): DemoState => ({
   presence: true,
-  lighting: { enabled: true, brightness: 70, scene: 'focus' },
+  lighting: { enabled: true, brightness: 70, scene: 'focus', color: '#00a0ff' },
+  pressure: { value: 0, target: 0, threshold: 40, muted: false, testUntil: 0 },
   presses: 0,
   privacy: true,
   locked: false,
@@ -51,12 +53,25 @@ class DemoDevice {
 
   private get s() { return persisted }
 
+  private sliderPos() {
+    // Simulated slide control: drifts slowly so the demo looks alive. Real hardware reads a real slider.
+    return Math.round(50 + 45 * Math.sin((Date.now() - this.s.bootedAt) / 3500))
+  }
+
   private features() {
     const full = this.profile === 'full'
     const s = this.s
+    const pos = this.sliderPos()
+    const p = s.pressure
+    const pressed = p.value >= p.threshold
     return {
+      slideControl: { available: full, position: pos },
+      pressureSensing: { available: full, value: Math.round(p.value), pressed, threshold: p.threshold },
+      audioAlert: { available: full, active: (pressed && !p.muted) || Date.now() < p.testUntil, muted: p.muted },
       workspacePresence: { available: full, value: s.presence },
-      ambientLighting: { available: true, enabled: s.lighting.enabled, brightness: s.lighting.brightness, scene: s.lighting.scene, scenes: ['focus', 'calm', 'warm', 'alert'] },
+      ambientLighting: full
+        ? { available: true, enabled: s.lighting.enabled, brightness: pos, brightnessSource: 'physical', color: s.lighting.color }
+        : { available: true, enabled: s.lighting.enabled, brightness: s.lighting.brightness, scene: s.lighting.scene, scenes: ['focus', 'calm', 'warm', 'alert'] },
       workspaceAction: { available: true, pressCount: s.presses },
       privacyProtection: { available: full, enabled: s.privacy },
       workstationLock: { available: full, locked: s.locked },
@@ -92,7 +107,9 @@ class DemoDevice {
 
   start() {
     this.hello()
-    this.intervals.push(setInterval(() => this.telemetry(), 2000))
+    this.intervals.push(setInterval(() => this.telemetry(), 400))
+    // Simulated pressure pad eases toward its target, like a finger pressing and releasing.
+    this.intervals.push(setInterval(() => { const p = this.s.pressure; p.value += (p.target - p.value) * 0.35 }, 80))
     // Gentle, believable drift: presence changes occasionally, battery drains slowly.
     const flip = () => {
       if (this.profile === 'full') {
@@ -132,7 +149,15 @@ class DemoDevice {
       const s = this.s
       switch (`${feature}.${action}`) {
         case 'ambientLighting.setEnabled': s.lighting.enabled = v as boolean; break
-        case 'ambientLighting.setBrightness': s.lighting.brightness = v as number; break
+        case 'ambientLighting.setBrightness':
+          if (this.profile === 'full') return reply(false, 'Brightness is set by the slide control on the console')
+          s.lighting.brightness = v as number; break
+        case 'ambientLighting.setColor': s.lighting.color = v as string; break
+        case 'pressureSensing.setThreshold': s.pressure.threshold = v as number; break
+        case 'audioAlert.setMuted': s.pressure.muted = v as boolean; break
+        case 'audioAlert.test':
+          if (s.pressure.muted) return reply(false, 'Buzzer is muted')
+          s.pressure.testUntil = Date.now() + 400; break
         case 'ambientLighting.setScene': s.lighting.scene = v as string; break
         case 'privacyProtection.setEnabled': s.privacy = v as boolean; break
         case 'workstationLock.lock': s.locked = true; break
@@ -156,6 +181,7 @@ class DemoDevice {
 
   // Demo tools
   simulatePresence(present: boolean) { this.s.presence = present; this.telemetry() }
+  pressPad() { this.s.pressure.target = 75; this.timers.push(setTimeout(() => { this.s.pressure.target = 0 }, 2000)) }
   pressButton() { this.s.presses++; this.event('workspaceAction.pressed', 'workspaceAction'); this.telemetry() }
   turnControl(id: string) { this.s.lastControl = id; this.event('control.activated', 'productivityControls', id); this.telemetry() }
   scanFingerprint(ok: boolean) {
@@ -203,6 +229,7 @@ export const demoControls = {
   reset: () => { persisted = fresh(); blockedUntil = 0 },
   simulatePresence: (p: boolean) => active?.simulatePresence(p),
   pressButton: () => active?.pressButton(),
+  pressPad: () => active?.pressPad(),
   turnControl: (id: string) => active?.turnControl(id),
   scanFingerprint: (ok: boolean) => active?.scanFingerprint(ok),
   dropConnection(ms = 8000) {

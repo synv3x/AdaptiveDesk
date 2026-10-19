@@ -1,5 +1,5 @@
 import {
-  Fingerprint, Lightbulb, Lock, MousePointerClick, ScanEye, ShieldCheck,
+  BellRing, Fingerprint, Gauge, SlidersVertical, Lightbulb, Lock, MousePointerClick, ScanEye, ShieldCheck,
   SlidersHorizontal, Volume2, Watch, type LucideIcon,
 } from 'lucide-react'
 
@@ -22,6 +22,9 @@ export const FEATURE_IDS = [
   'mediaControl',
   'productivityControls',
   'wearable',
+  'slideControl',
+  'pressureSensing',
+  'audioAlert',
 ] as const
 
 export type FeatureId = (typeof FEATURE_IDS)[number]
@@ -35,6 +38,7 @@ export type ActionSpec =
   | { type: 'boolean'; sensitive?: boolean }
   | { type: 'number'; min: number; max: number; sensitive?: boolean }
   | { type: 'enum'; values: readonly string[]; sensitive?: boolean }
+  | { type: 'color'; sensitive?: boolean }
 
 export interface FeatureDef {
   id: FeatureId
@@ -70,6 +74,7 @@ export const FEATURES: Record<FeatureId, FeatureDef> = {
       setEnabled: { type: 'boolean' },
       setBrightness: { type: 'number', min: 0, max: 100 },
       setScene: { type: 'enum', values: LIGHT_SCENES },
+      setColor: { type: 'color' },
     },
   },
   workspaceAction: {
@@ -118,6 +123,21 @@ export const FEATURES: Record<FeatureId, FeatureDef> = {
       setIntensity: { type: 'enum', values: ['low', 'medium', 'high'] },
     },
   },
+  slideControl: {
+    id: 'slideControl', label: 'Slide Control', group: 'Productivity', icon: SlidersVertical,
+    description: 'A physical slider on the desk console.',
+    actions: {},
+  },
+  pressureSensing: {
+    id: 'pressureSensing', label: 'Pressure Sensing', group: 'Productivity', icon: Gauge,
+    description: 'Detects how hard something presses on the pad.',
+    actions: { setThreshold: { type: 'number', min: 5, max: 95 } },
+  },
+  audioAlert: {
+    id: 'audioAlert', label: 'Audio Alert', group: 'Productivity', icon: BellRing,
+    description: 'Buzzer for pressure and notification alerts.',
+    actions: { test: { type: 'none' }, setMuted: { type: 'boolean' } },
+  },
 }
 
 export const FEATURE_LIST = FEATURE_IDS.map((id) => FEATURES[id])
@@ -137,6 +157,8 @@ export function validateCommand(feature: string, action: string, value: unknown)
         ? null : `Expected a number between ${spec.min} and ${spec.max}`
     case 'enum':
       return typeof value === 'string' && spec.values.includes(value) ? null : `Expected one of: ${spec.values.join(', ')}`
+    case 'color':
+      return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? null : 'Expected a colour like #00a0ff'
   }
 }
 

@@ -1,0 +1,20 @@
+{
+  "name": "adaptivedesk-serial-bridge",
+  "version": "0.1.0",
+  "description": "USB serial to WebSocket bridge for the AdaptiveDesk dashboard",
+  "main": "bridge.mjs",
+  "scripts": {
+    "start": "node bridge.mjs",
+    "ports": "node bridge.mjs --list",
+    "test": "node --test test/bridge.test.mjs"
+  },
+  "type": "module",
+  "dependencies": {
+    "serialport": "^13.0.0",
+    "ws": "^8.22.0"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  }
+}

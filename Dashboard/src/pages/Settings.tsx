@@ -2,6 +2,7 @@ import { Bell, Cpu, Download, FlaskConical, MonitorCog, Palette, Plug, Radio, Re
 import { useState } from 'react'
 import { Badge, Button, Card, CardHeader, ConfirmDialog, PageHeader, Row, Segmented, Select, StatusDot, TextInput, Toggle } from '../components/ui/primitives'
 import { useConnectionSummary } from '../components/layout/Shell'
+import { SerialConnectionCard } from '../components/SerialPanel'
 import { FEATURE_LIST } from '../lib/features'
 import { PROTOCOL_VERSION } from '../lib/protocol'
 import { demoControls } from '../services/demoDevice'
@@ -12,6 +13,7 @@ import { usePrefs, type DemoProfile, type ThemePref } from '../store/prefs'
 import { useSession } from '../store/session'
 import { toast } from '../store/toasts'
 
+type Transport = 'serial' | 'wifi' | 'bridge'
 type Tab = 'general' | 'device' | 'notifications' | 'manage' | 'diagnostics'
 const TABS: { value: Tab; label: string }[] = [
   { value: 'general', label: 'General' }, { value: 'device', label: 'Device & Network' }, { value: 'notifications', label: 'Notifications' },
@@ -42,9 +44,12 @@ function DeviceTab() {
   const c = useConnectionSummary()
   const [portText, setPortText] = useState(String(p.device.port))
   const dev = (patch: Partial<typeof p.device>) => p.set({ device: { ...p.device, ...patch } })
-  const valid = liveUrl() !== null
+  const valid = p.device.transport === 'serial' ? true : liveUrl() !== null
   const busy = conn.status === 'connecting' || conn.status === 'reconnecting'
   const live = p.mode === 'live'
+  const serial = p.device.transport === 'serial'
+  const bridge = p.device.transport === 'bridge'
+  const [bridgeText, setBridgeText] = useState(String(p.device.bridgePort))
 
   return (
     <div className="space-y-4">
@@ -54,20 +59,59 @@ function DeviceTab() {
       </Card>
 
       {live ? (
-        <Card>
-          <CardHeader title="Your AdaptiveDesk" subtitle="Enter the address your console shows on its display or serial monitor." icon={Plug}
-            action={<div className="flex items-center gap-2 text-sm"><StatusDot tone={c.tone} pulse={c.pulse} />{c.label}</div>} />
-          <Row title="Address" hint="Hostname or IP, e.g. adaptivedesk.local or 192.168.1.50"><TextInput aria-label="Device address" className="w-64" placeholder="192.168.1.50" value={p.device.host} onChange={(e) => dev({ host: e.target.value })} /></Row>
-          <Row title="Port"><TextInput aria-label="Port" className="w-28" inputMode="numeric" value={portText} onChange={(e) => { setPortText(e.target.value); const n = Number(e.target.value); if (Number.isInteger(n)) dev({ port: n }) }} /></Row>
-          <Row title="Path"><TextInput aria-label="Path" className="w-28" value={p.device.path} onChange={(e) => dev({ path: e.target.value })} /></Row>
-          <Row title="Connect automatically" hint="When the dashboard opens."><Toggle label="Connect automatically" checked={p.device.autoConnect} onChange={(v) => dev({ autoConnect: v })} /></Row>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            {conn.status === 'connected' || busy ? <Button icon={Unplug} onClick={() => useDevice.getState().disconnect()}>Disconnect</Button>
-              : <Button variant="primary" icon={Plug} disabled={!valid} onClick={() => useDevice.getState().connectLive()}>Connect</Button>}
-            {!valid && <span className="text-[13px] text-muted">Enter a valid address, port and path to connect.</span>}
-            {conn.error && conn.status !== 'connected' && <span className="text-[13px] text-warn">{conn.error}{conn.status === 'reconnecting' && conn.retryAt ? ' · retrying…' : ''}</span>}
-          </div>
-        </Card>
+        <>
+          <Card>
+            <CardHeader title="Connection type" subtitle="USB (Web Serial) talks to the ESP32 straight from the browser: no Wi-Fi and no extra program." icon={Plug} />
+            <Segmented<Transport> value={p.device.transport}
+              onChange={(v) => { if (v !== p.device.transport) { useDevice.getState().disconnect(); dev({ transport: v }) } }}
+              options={[{ value: 'serial', label: 'USB · Web Serial (recommended)' }, { value: 'wifi', label: 'Wi-Fi' }, { value: 'bridge', label: 'USB bridge (legacy)' }]} />
+          </Card>
+          {serial ? (
+            <Card>
+              <CardHeader title="USB connection (Web Serial)" subtitle="Chrome, Edge or Brave with Web Serial enabled." icon={Plug}
+                action={<div className="flex items-center gap-2 text-sm"><StatusDot tone={c.tone} pulse={c.pulse} />{c.label}</div>} />
+              <SerialConnectionCard />
+            </Card>
+          ) : (
+          <Card>
+            <CardHeader title={bridge ? 'USB bridge (legacy)' : 'Your AdaptiveDesk (Wi-Fi)'}
+              subtitle={bridge ? 'A small Node program on this computer relays the ESP32 to the dashboard. Prefer Web Serial.' : 'Enter the address your console prints in its Serial Monitor.'} icon={Plug}
+              action={<div className="flex items-center gap-2 text-sm"><StatusDot tone={c.tone} pulse={c.pulse} />{c.label}</div>} />
+            {bridge ? (
+              <>
+                <ol className="space-y-2.5 text-[13px] leading-relaxed text-muted">
+                  <li><b className="text-ink">1.</b> Plug the ESP32 into this computer with a <i>data</i> USB cable.</li>
+                  <li><b className="text-ink">2.</b> Close PlatformIO's Serial Monitor. Only one program can use the COM port.</li>
+                  <li><b className="text-ink">3.</b> In a terminal: <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-[12px] text-ink">cd tools/serial-bridge</code> then <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-[12px] text-ink">npm install</code> (first time only), then <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-[12px] text-ink">npm start -- --port COM5</code> (use your COM number).</li>
+                  <li><b className="text-ink">4.</b> Click <b className="text-ink">Connect</b> below.</li>
+                </ol>
+                <div className="mt-4">
+                  <Row title="Bridge port" hint="Only change this if you started the bridge with --ws-port."><TextInput aria-label="Bridge port" className="w-28" inputMode="numeric" value={bridgeText} onChange={(e) => { setBridgeText(e.target.value); const n = Number(e.target.value); if (Number.isInteger(n)) dev({ bridgePort: n }) }} /></Row>
+                  <Row title="Connect automatically" hint="When the dashboard opens."><Toggle label="Connect automatically" checked={p.device.autoConnect} onChange={(v) => dev({ autoConnect: v })} /></Row>
+                </div>
+              </>
+            ) : (
+              <>
+                <Row title="Address" hint="Hostname or IP, e.g. adaptivedesk.local or 192.168.1.50"><TextInput aria-label="Device address" className="w-64" placeholder="192.168.1.50" value={p.device.host} onChange={(e) => dev({ host: e.target.value })} /></Row>
+                <Row title="Port"><TextInput aria-label="Port" className="w-28" inputMode="numeric" value={portText} onChange={(e) => { setPortText(e.target.value); const n = Number(e.target.value); if (Number.isInteger(n)) dev({ port: n }) }} /></Row>
+                <Row title="Path"><TextInput aria-label="Path" className="w-28" value={p.device.path} onChange={(e) => dev({ path: e.target.value })} /></Row>
+                <Row title="Connect automatically" hint="When the dashboard opens."><Toggle label="Connect automatically" checked={p.device.autoConnect} onChange={(v) => dev({ autoConnect: v })} /></Row>
+              </>
+            )}
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              {conn.status === 'connected' || busy ? <Button icon={Unplug} onClick={() => useDevice.getState().disconnect()}>Disconnect</Button>
+                : <Button variant="primary" icon={Plug} disabled={!valid} onClick={() => useDevice.getState().connectLive()}>Connect</Button>}
+              {!valid && <span className="text-[13px] text-muted">{bridge ? 'Enter a valid bridge port.' : 'Enter a valid address, port and path to connect.'}</span>}
+            </div>
+            {conn.error && conn.status !== 'connected' && (
+              <div className="mt-4 rounded-xl border border-warn/25 bg-warn/10 px-3.5 py-3 text-[13px] leading-relaxed text-warn" role="alert">
+                <div className="font-medium">{conn.status === 'reconnecting' ? 'Can’t reach your console. Retrying automatically.' : 'Couldn’t connect.'}</div>
+                <div className="mt-0.5 opacity-90">{conn.error}</div>
+              </div>
+            )}
+          </Card>
+          )}
+        </>
       ) : (
         <Card>
           <CardHeader title="Demo device" subtitle="A simulated console for demonstrations." icon={FlaskConical} action={<Badge tone="info">Simulated</Badge>} />
@@ -81,6 +125,7 @@ function DeviceTab() {
             <Button size="sm" onClick={() => demoControls.simulatePresence(true)}>Return to desk</Button>
             <Button size="sm" onClick={() => demoControls.pressButton()}>Press Workspace Action</Button>
             <Button size="sm" onClick={() => demoControls.turnControl('dialA')}>Turn Dial A</Button>
+            <Button size="sm" onClick={() => demoControls.pressPad()}>Press pressure pad</Button>
             <Button size="sm" onClick={() => demoControls.scanFingerprint(true)}>Fingerprint OK</Button>
             <Button size="sm" onClick={() => demoControls.scanFingerprint(false)}>Fingerprint fails</Button>
             <Button size="sm" onClick={() => demoControls.dropConnection(6000)}>Drop connection</Button>
@@ -91,7 +136,7 @@ function DeviceTab() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Wi-Fi" subtitle="How your console joins your network." icon={Wifi} />
+          <CardHeader title="Wi-Fi (optional)" subtitle="Only needed for the Wi-Fi connection type." icon={Wifi} />
           <p className="text-[13px] leading-relaxed text-muted">Your console's Wi-Fi network is set in its firmware configuration file, not in this dashboard. Credentials are never sent to or stored by the dashboard.</p>
           <div className="mt-3 rounded-xl border border-line bg-raised px-3.5 py-2.5 text-sm">
             {conn.status === 'connected' ? <>Console network: <b>{system?.ssid ?? 'not reported'}</b></> : <span className="text-muted">Connect to see the console's network.</span>}

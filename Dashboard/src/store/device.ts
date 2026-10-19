@@ -4,6 +4,7 @@ import { FEATURES, validateCommand, type FeatureId } from '../lib/features'
 import { PROTOCOL_VERSION, type DeviceMessage, type FeatureReport, type JsonValue, type SystemInfo } from '../lib/protocol'
 import { DeviceClient, type ConnectionStatus } from '../services/deviceClient'
 import { demoControls } from '../services/demoDevice'
+import { findAuthorizedPort, getSerialApi, requestSerialPort, unsupportedReason, type SerialPortLike } from '../services/webSerial'
 import { logActivity } from './activity'
 import { usePrefs } from './prefs'
 import { toast } from './toasts'
@@ -23,7 +24,7 @@ export interface CommandResult { ok: boolean; error?: string }
 export interface LogEntry { ts: number; dir: 'tx' | 'rx' | 'sys'; text: string }
 
 interface DeviceState {
-  connection: { status: ConnectionStatus; error?: string; attempt: number; retryAt?: number; connectedAt?: number; lastSeen?: number; latencyMs?: number }
+  connection: { status: ConnectionStatus; error?: string; attempt: number; retryAt?: number; connectedAt?: number; lastSeen?: number; latencyMs?: number; messageCount: number }
   identity: { deviceId?: string; name?: string; firmware?: string; board?: string }
   /** Last state REPORTED by the device. Never written from user input or local preferences. */
   features: Partial<Record<FeatureId, FeatureReport>>
@@ -32,8 +33,18 @@ interface DeviceState {
   log: LogEntry[]
 
   applyMode: () => void
+  /** Wi-Fi / legacy bridge (WebSocket) connect. */
   connectLive: () => void
+  /** Start a Web Serial connection on an already-chosen port (or the remembered authorized one). */
+  connectSerial: (port?: SerialPortLike | null) => void
+  /** Show the browser's port chooser, then connect. Must be called straight from a click handler. */
+  pickAndConnectSerial: (opts?: { all?: boolean }) => Promise<void>
+  /** Reconnect to the remembered authorized port (used when the ESP32 is plugged back in). */
+  autoReconnectSerial: () => void
+  /** User pressed Disconnect: closes the link and suppresses serial auto-reconnect until they connect again. */
   disconnect: () => void
+  /** App teardown (not a user decision): closes the link without touching the auto-reconnect preference. */
+  shutdown: () => void
   sendCommand: (feature: FeatureId, action: string, value?: JsonValue) => Promise<CommandResult>
 }
 
@@ -41,14 +52,33 @@ const COMMAND_TIMEOUT_MS = 5000
 const resolvers = new Map<string, (r: CommandResult) => void>()
 let cmdSeq = 0
 let baseline = false
+/** Bumped on every connect/disconnect decision so late async results (getPorts) can't revive a stale connection. */
+let connectSeq = 0
+/** True after the user pressed Disconnect: don't auto-reconnect serial until they connect again. */
+let userDisconnected = false
 
+/** WebSocket URL for the legacy bridge or Wi-Fi. Native Web Serial has no URL (returns null). */
 export function liveUrl(): string | null {
-  const { host, port, path } = usePrefs.getState().device
+  const { transport, bridgePort, host, port, path } = usePrefs.getState().device
+  if (transport === 'serial') return null
+  if (transport === 'bridge') {
+    // The legacy bridge only listens on this computer's loopback address.
+    return Number.isInteger(bridgePort) && bridgePort >= 1024 && bridgePort <= 65535 ? `ws://127.0.0.1:${bridgePort}/ws` : null
+  }
   const h = host.trim()
   if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(h)) return null
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null
   if (!/^\/[A-Za-z0-9/_-]*$/.test(path)) return null
   return `ws://${h}:${port}${path}`
+}
+
+/** Browsers block ws:// from an https:// page, so say so plainly instead of failing mysteriously. */
+export function liveBlockedReason(): string | null {
+  // Web Serial and ws://127.0.0.1 (the legacy bridge) are treated as secure by browsers; only Wi-Fi devices are blocked.
+  if (usePrefs.getState().device.transport !== 'wifi') return null
+  if (typeof location !== 'undefined' && location.protocol === 'https:')
+    return 'This page is served over HTTPS, and browsers block connections to a local ws:// device from it. Open the dashboard locally with "npm run dev" (http://localhost:5173) to use Live Mode.'
+  return null
 }
 
 export const useDevice = create<DeviceState>()((set, get) => {
@@ -75,6 +105,7 @@ export const useDevice = create<DeviceState>()((set, get) => {
           error: status === 'connected' ? undefined : info.error ?? (status === 'idle' ? undefined : prev.error),
           connectedAt: status === 'connected' ? now : wasConnected ? undefined : prev.connectedAt,
           latencyMs: status === 'connected' ? prev.latencyMs : undefined,
+          messageCount: status === 'connecting' ? 0 : prev.messageCount,
         },
       })
       if (status === 'connected') {
@@ -92,10 +123,8 @@ export const useDevice = create<DeviceState>()((set, get) => {
     },
     onLatency: (ms) => set((s) => ({ connection: { ...s.connection, latencyMs: ms } })),
     onLog: (dir, text) => set((s) => ({ log: [...s.log.slice(-199), { ts: Date.now(), dir, text }] })),
-    onMessage: (msg) => {
-      set((s) => ({ connection: { ...s.connection, lastSeen: Date.now() } }))
-      handleMessage(msg)
-    },
+    onRx: () => set((s) => ({ connection: { ...s.connection, lastSeen: Date.now(), messageCount: s.connection.messageCount + 1 } })),
+    onMessage: (msg) => handleMessage(msg),
   })
 
   const handleMessage = (msg: DeviceMessage) => {
@@ -106,7 +135,12 @@ export const useDevice = create<DeviceState>()((set, get) => {
         break
       case 'telemetry': {
         const prev = get().features
-        set({ features: { ...prev, ...msg.features }, system: msg.system ?? get().system })
+        const merged = { ...prev }
+        for (const id of Object.keys(msg.features) as FeatureId[]) {
+          const next = msg.features[id]!
+          if (!prev[id] || JSON.stringify(prev[id]) !== JSON.stringify(next)) merged[id] = next
+        }
+        set({ features: merged, system: msg.system ?? get().system })
         if (baseline) diff(prev, msg.features)
         baseline = true
         break
@@ -123,7 +157,7 @@ export const useDevice = create<DeviceState>()((set, get) => {
   }
 
   return {
-    connection: { status: 'idle', attempt: 0 },
+    connection: { status: 'idle', attempt: 0, messageCount: 0 },
     identity: {},
     features: {},
     pending: {},
@@ -132,27 +166,100 @@ export const useDevice = create<DeviceState>()((set, get) => {
     applyMode: () => {
       const { mode, demoProfile, heartbeatSec, refreshSec, device } = usePrefs.getState()
       const common = { heartbeatMs: heartbeatSec * 1000, refreshMs: refreshSec * 1000 }
+      const seq = ++connectSeq
       set({ features: {}, system: undefined, identity: {}, pending: {} })
       if (mode === 'demo') {
+        userDisconnected = false
         client.connect({ kind: 'demo', profile: demoProfile, ...common })
         return
       }
+      if (device.transport === 'serial') {
+        // Native Web Serial never touches WebSockets. Reconnect silently to an already-authorized ESP32 if there is one.
+        const reason = unsupportedReason()
+        if (reason) {
+          client.disconnect()
+          set((s) => ({ connection: { ...s.connection, status: 'error', attempt: 0, error: reason } }))
+          return
+        }
+        if (device.autoConnect && !userDisconnected) void autoConnectSerial(seq)
+        else client.disconnect()
+        return
+      }
       const url = liveUrl()
-      if (device.autoConnect && url) client.connect({ kind: 'live', url, ...common })
+      const blocked = liveBlockedReason()
+      if (blocked && device.autoConnect && url) {
+        client.disconnect()
+        set((s) => ({ connection: { ...s.connection, status: 'error', attempt: 0, error: blocked } }))
+        return
+      }
+      if (device.autoConnect && url) client.connect({ kind: 'live', url, flavor: device.transport, ...common })
       else client.disconnect()
     },
 
     connectLive: () => {
-      const { heartbeatSec, refreshSec } = usePrefs.getState()
+      const { heartbeatSec, refreshSec, device } = usePrefs.getState()
+      connectSeq++
+      if (device.transport === 'serial') return get().connectSerial()
       const url = liveUrl()
       if (!url) {
-        set({ connection: { status: 'error', attempt: 0, error: 'Enter a valid device address (hostname or IP), port and path.' } })
+        set((s) => ({ connection: { ...s.connection, status: 'error', attempt: 0, error: device.transport === 'bridge' ? 'Enter a valid bridge port (1024-65535).' : 'Enter a valid device address (hostname or IP), port and path.' } }))
         return
       }
-      client.connect({ kind: 'live', url, heartbeatMs: heartbeatSec * 1000, refreshMs: refreshSec * 1000 })
+      const blocked = liveBlockedReason()
+      if (blocked) {
+        set((s) => ({ connection: { ...s.connection, status: 'error', attempt: 0, error: blocked } }))
+        return
+      }
+      client.connect({ kind: 'live', url, flavor: device.transport, heartbeatMs: heartbeatSec * 1000, refreshMs: refreshSec * 1000 })
     },
 
-    disconnect: () => client.disconnect(),
+    connectSerial: (port) => {
+      const { heartbeatSec, refreshSec, device } = usePrefs.getState()
+      connectSeq++
+      userDisconnected = false
+      const reason = unsupportedReason()
+      if (reason) {
+        set((s) => ({ connection: { ...s.connection, status: 'error', attempt: 0, error: reason } }))
+        return
+      }
+      set({ features: {}, system: undefined, identity: {}, pending: {} })
+      client.connect({ kind: 'serial', port, hint: { vid: device.serialVid, pid: device.serialPid }, heartbeatMs: heartbeatSec * 1000, refreshMs: refreshSec * 1000 })
+    },
+
+    pickAndConnectSerial: async (opts) => {
+      // requestPort() needs a user gesture, so it is the first thing that happens, before any other await.
+      let port: SerialPortLike | null
+      try {
+        port = await requestSerialPort({ all: opts?.all })
+      } catch (e) {
+        set((s) => ({ connection: { ...s.connection, status: 'error', attempt: 0, error: e instanceof Error ? e.message : String(e) } }))
+        return
+      }
+      if (!port) return // chooser cancelled: not an error
+      const info = port.getInfo()
+      const cur = usePrefs.getState().device
+      usePrefs.getState().set({ device: { ...cur, serialVid: info.usbVendorId, serialPid: info.usbProductId } })
+      get().connectSerial(port)
+    },
+
+    autoReconnectSerial: () => {
+      const { mode, device } = usePrefs.getState()
+      const st = get().connection.status
+      if (mode !== 'live' || device.transport !== 'serial' || !device.autoConnect || userDisconnected) return
+      if (st === 'connected' || st === 'connecting') return
+      void autoConnectSerial(++connectSeq)
+    },
+
+    disconnect: () => {
+      connectSeq++
+      userDisconnected = true
+      client.disconnect()
+    },
+
+    shutdown: () => {
+      connectSeq++
+      client.disconnect()
+    },
 
     sendCommand: (feature, action, value) => {
       const err = validateCommand(feature, action, value)
@@ -170,6 +277,18 @@ export const useDevice = create<DeviceState>()((set, get) => {
         setTimeout(() => settle(requestId, 'timeout', 'The device did not respond in time'), COMMAND_TIMEOUT_MS)
       })
     },
+  }
+
+  /** Reconnect to an already-authorized port without a user gesture. Quietly idles if there isn't one yet. */
+  async function autoConnectSerial(seq: number) {
+    const api = getSerialApi()
+    if (!api) return
+    const { device, heartbeatSec, refreshSec } = usePrefs.getState()
+    let port: SerialPortLike | null = null
+    try { port = await findAuthorizedPort(api, { vid: device.serialVid, pid: device.serialPid }) } catch { port = null }
+    if (seq !== connectSeq) return // superseded by a newer connect/disconnect
+    if (!port) { client.disconnect(); return }
+    client.connect({ kind: 'serial', port, hint: { vid: device.serialVid, pid: device.serialPid }, heartbeatMs: heartbeatSec * 1000, refreshMs: refreshSec * 1000 })
   }
 
   /** Compare successive device reports and log only what the device itself changed. */
@@ -194,6 +313,9 @@ export const useDevice = create<DeviceState>()((set, get) => {
       }
       if (id === 'ambientLighting' && a.state.enabled !== b.state.enabled && typeof b.state.enabled === 'boolean') {
         logActivity({ category: 'device', title: `Ambient lighting turned ${b.state.enabled ? 'on' : 'off'}` })
+      }
+      if (id === 'pressureSensing' && a.state.pressed !== b.state.pressed && typeof b.state.pressed === 'boolean') {
+        logActivity({ category: 'device', title: b.state.pressed ? 'Pressure threshold crossed' : 'Pressure released', tone: b.state.pressed ? 'warn' : 'neutral' })
       }
       if (id === 'wearable' && a.state.connected !== b.state.connected && typeof b.state.connected === 'boolean') {
         logActivity({ category: 'device', title: b.state.connected ? 'Wristband connected' : 'Wristband disconnected', tone: b.state.connected ? 'ok' : 'warn' })

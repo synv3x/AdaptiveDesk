@@ -25,17 +25,19 @@ const MOBILE_PRIMARY = ['/', '/productivity', '/breaks', '/security']
 export function useConnectionSummary(): { tone: Tone; label: string; detail: string; pulse: boolean } {
   const conn = useDevice((s) => s.connection)
   const mode = usePrefs((s) => s.mode)
-  const host = usePrefs((s) => s.device.host)
+  const device = usePrefs((s) => s.device)
+  const linkName = device.transport === 'serial' ? 'USB' : device.transport === 'bridge' ? 'USB bridge' : 'Wi-Fi'
+  const target = device.transport === 'serial' ? 'USB (Web Serial)' : device.transport === 'bridge' ? 'USB bridge' : device.host
   if (mode === 'demo') {
     if (conn.status === 'connected') return { tone: 'info', label: 'Demo device', detail: 'Simulated · no hardware', pulse: true }
     return { tone: 'warn', label: 'Demo reconnecting', detail: 'Simulated connection lost', pulse: false }
   }
   switch (conn.status) {
-    case 'connected': return { tone: 'ok', label: 'Connected', detail: `AdaptiveDesk${conn.latencyMs != null ? ` · ${conn.latencyMs} ms` : ''}`, pulse: true }
-    case 'connecting': return { tone: 'info', label: 'Connecting…', detail: host || 'AdaptiveDesk', pulse: true }
-    case 'reconnecting': return { tone: 'warn', label: 'Offline', detail: 'Reconnecting automatically', pulse: false }
+    case 'connected': return { tone: 'ok', label: 'Connected', detail: `${linkName}${conn.latencyMs != null ? ` · ${conn.latencyMs} ms` : ''}`, pulse: true }
+    case 'connecting': return { tone: 'info', label: 'Connecting…', detail: target || 'AdaptiveDesk', pulse: true }
+    case 'reconnecting': return { tone: 'warn', label: 'Offline', detail: device.transport === 'serial' ? 'Waiting for the ESP32' : 'Reconnecting automatically', pulse: false }
     case 'error': return { tone: 'danger', label: 'Connection error', detail: conn.error ?? 'Check settings', pulse: false }
-    default: return { tone: 'neutral', label: 'Not connected', detail: host ? 'Tap to connect in Settings' : 'No device configured', pulse: false }
+    default: return { tone: 'neutral', label: 'Not connected', detail: device.transport === 'serial' ? 'Click Connect ESP32' : target ? 'Open Settings to connect' : 'No device configured', pulse: false }
   }
 }
 

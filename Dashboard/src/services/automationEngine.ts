@@ -41,7 +41,7 @@ export async function executeAction(type: ActionType, ctx: { rule?: Rule; contro
       const first = await send('ambientLighting', 'setEnabled', profile.lighting.enabled)
       if (!first.ok || !profile.lighting.enabled) return fromResult(first, 'Lighting request acknowledged.')
       const state = getFeature('ambientLighting').state
-      if (typeof state.brightness === 'number') await send('ambientLighting', 'setBrightness', profile.lighting.brightness)
+      if (typeof state.brightness === 'number' && state.brightnessSource !== 'physical') await send('ambientLighting', 'setBrightness', profile.lighting.brightness)
       if (Array.isArray(state.scenes) && state.scenes.includes(profile.lighting.scene)) await send('ambientLighting', 'setScene', profile.lighting.scene)
       return { ok: true, detail: `Sent ${profile.name} lighting to the device.` }
     }
